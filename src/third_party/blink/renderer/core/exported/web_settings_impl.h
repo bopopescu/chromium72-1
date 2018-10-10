@@ -50,6 +50,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
 
   bool ShrinksViewportContentToFit() const override;
   bool ViewportEnabled() const override;
+  bool GetAccessibilityExploreByMouseEnabled() override;
   void SetAccelerated2dCanvasMSAASampleCount(int) override;
   void SetAutoplayPolicy(AutoplayPolicy) override;
   void SetPreferCompositingToLCDTextEnabled(bool) override;
@@ -63,6 +64,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetAlwaysShowContextMenuOnTouch(bool) override;
   void SetAntialiased2dCanvasEnabled(bool) override;
   void SetAntialiasedClips2dCanvasEnabled(bool) override;
+  void SetAccessibilityExploreByMouseEnabled(bool) override;
   void SetAutoZoomFocusedNodeToLegibleScale(bool) override;
   void SetClobberUserAgentInitialScaleQuirk(bool) override;
   void SetCookieEnabled(bool) override;

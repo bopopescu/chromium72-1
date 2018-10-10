@@ -1037,5 +1037,9 @@
       initial: 800,
       type: "int",
     },
+    {
+      name: "accessibilityExploreByMouseEnabled",
+      initial: "false",
+    },
   ],
 }
