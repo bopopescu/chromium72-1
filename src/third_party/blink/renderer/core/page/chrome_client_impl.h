@@ -39,6 +39,10 @@
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/platform/graphics/touch_action.h"
 
+namespace cc {
+class ScopedDeferMainFrameUpdate;
+}
+
 namespace blink {
 
 class PagePopup;
@@ -66,6 +70,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void TakeFocus(WebFocusType) override;
   void FocusedNodeChanged(Node* from_node, Node* to_node) override;
   void BeginLifecycleUpdates() override;
+  void PauseLifecycleUpdates() override;
   bool HadFormInteraction() const override;
   void StartDragging(LocalFrame*,
                      const WebDragData&,
@@ -253,6 +258,8 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   Cursor last_set_mouse_cursor_for_testing_;
   bool cursor_overridden_;
   bool did_request_non_empty_tool_tip_;
+  std::unique_ptr<cc::ScopedDeferMainFrameUpdate>
+      scoped_defer_main_frame_update_;
 
   FRIEND_TEST_ALL_PREFIXES(FileChooserQueueTest, DerefQueuedChooser);
 };

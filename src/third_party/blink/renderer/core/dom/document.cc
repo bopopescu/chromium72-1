@@ -6154,6 +6154,9 @@ void Document::BeginLifecycleUpdatesIfRenderingReady() {
     return;
   if (!IsRenderingReady())
     return;
+  // Considers it's not ready during background images are loading
+  if (deferred_background_image_count_ > 0)
+    return;
   View()->BeginLifecycleUpdates();
 }
 
@@ -7775,6 +7778,29 @@ void Document::SendViolationReport(
       violation_params->after_redirect ? RedirectStatus::kFollowedRedirect
                                        : RedirectStatus::kNoRedirect,
       nullptr /* Element */);
+}
+
+bool Document::AddDeferredBackgroundImage() {
+  if (!IsMainThread() || !frame_ || !frame_->IsMainFrame())
+    return false;
+
+  // pause update when the first background image was deferred
+  if (deferred_background_image_count_ == 0)
+    frame_->GetPage()->GetChromeClient().PauseLifecycleUpdates();
+
+  ++deferred_background_image_count_;
+  return true;
+}
+
+void Document::RemoveDeferredBackgroundImage() {
+  if (!IsMainThread() || !frame_ || !frame_->IsMainFrame())
+    return;
+
+  --deferred_background_image_count_;
+
+  // resume update when all background images were undeferred
+  if (deferred_background_image_count_ == 0)
+    frame_->GetPage()->GetChromeClient().BeginLifecycleUpdates();
 }
 
 template class CORE_TEMPLATE_EXPORT Supplement<Document>;

@@ -1455,6 +1455,8 @@ class CORE_EXPORT Document : public ContainerNode,
   SlotAssignmentEngine& GetSlotAssignmentEngine();
 
   bool IsSlotAssignmentOrLegacyDistributionDirty() const;
+  bool AddDeferredBackgroundImage();
+  void RemoveDeferredBackgroundImage();
 
 #if DCHECK_IS_ON()
   unsigned& SlotAssignmentRecalcForbiddenRecursionDepth() {
@@ -1952,6 +1954,8 @@ class CORE_EXPORT Document : public ContainerNode,
   BitVector parsed_feature_policies_;
 
   AtomicString override_last_modified_;
+
+  int deferred_background_image_count_ = 0;
 };
 
 extern template class CORE_EXTERN_TEMPLATE_EXPORT Supplement<Document>;

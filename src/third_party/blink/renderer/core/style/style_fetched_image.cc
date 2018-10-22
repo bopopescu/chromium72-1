@@ -33,6 +33,10 @@
 #include "third_party/blink/renderer/platform/geometry/layout_size.h"
 #include "third_party/blink/renderer/platform/graphics/placeholder_image.h"
 
+#if defined(OS_WEBOS)
+#include "third_party/blink/renderer/core/dom/user_gesture_indicator.h"
+#endif
+
 namespace blink {
 
 StyleFetchedImage::StyleFetchedImage(const Document& document,
@@ -47,6 +51,14 @@ StyleFetchedImage::StyleFetchedImage(const Document& document,
   // ResourceFetcher is not determined from StyleFetchedImage and it is
   // impossible to send a request for refetching.
   image_->SetNotRefetchableDataFromDiskCache();
+
+#if defined(OS_WEBOS)
+  if (!image_->IsLoaded() && url_.ProtocolIs("file") &&
+      !UserGestureIndicator::ProcessingUserGesture()) {
+    const Document* doc = document_;
+    commit_deferred_ = const_cast<Document*>(doc)->AddDeferredBackgroundImage();
+  }
+#endif
 }
 
 StyleFetchedImage::~StyleFetchedImage() = default;
@@ -136,6 +148,14 @@ void StyleFetchedImage::ImageNotifyFinished(ImageResourceContent*) {
 
     image_->UpdateImageAnimationPolicy();
   }
+
+#if defined(OS_WEBOS)
+  if (commit_deferred_) {
+    const Document* doc = document_;
+    const_cast<Document*>(doc)->RemoveDeferredBackgroundImage();
+    commit_deferred_ = false;
+  }
+#endif
 
   // Oilpan: do not prolong the Document's lifetime.
   document_.Clear();

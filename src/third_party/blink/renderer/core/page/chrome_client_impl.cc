@@ -934,7 +934,14 @@ void ChromeClientImpl::BeginLifecycleUpdates() {
   web_view_->StopDeferringCommits();
 
   if (WebLayerTreeView* tree_view = web_view_->LayerTreeView()) {
+    scoped_defer_main_frame_update_.reset();
     tree_view->SetNeedsBeginFrame();
+  }
+}
+
+void ChromeClientImpl::PauseLifecycleUpdates() {
+  if (WebLayerTreeView* tree_view = web_view_->LayerTreeView()) {
+    scoped_defer_main_frame_update_ = tree_view->DeferMainFrameUpdate();
   }
 }
 
