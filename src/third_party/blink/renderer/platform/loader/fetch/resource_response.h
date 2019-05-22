@@ -430,6 +430,13 @@ class PLATFORM_EXPORT ResourceResponse final {
     is_signed_exchange_inner_response_ = is_signed_exchange_inner_response;
   }
 
+#if defined(USE_FILESCHEME_CODECACHE)
+  base::Time FileLastModifiedTime() const { return file_last_modified_time_; }
+  void SetFileLastModifiedTime(base::Time last_modified_time) {
+    file_last_modified_time_ = last_modified_time;
+  }
+#endif
+
   // This method doesn't compare the all members.
   static bool Compare(const ResourceResponse&, const ResourceResponse&);
 
@@ -584,6 +591,11 @@ class PLATFORM_EXPORT ResourceResponse final {
   // PlzNavigate: the redirect responses are transmitted
   // inside the final response.
   Vector<ResourceResponse> redirect_responses_;
+
+#if defined(USE_FILESCHEME_CODECACHE)
+  // Last modified time for local files
+  base::Time file_last_modified_time_;
+#endif
 };
 
 inline bool operator==(const ResourceResponse& a, const ResourceResponse& b) {

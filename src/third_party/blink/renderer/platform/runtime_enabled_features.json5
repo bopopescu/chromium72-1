@@ -1437,6 +1437,13 @@
       name: "XSLT",
       status: "stable",
     },
+///@name USE_FILESCHEME_CODECACHE
+///@{
+    {
+      name: "LocalResourceCodeCache",
+      status: "experimental",
+    },
+///@}
 ///@name USE_NEVA_MEDIA
 ///@{
     {

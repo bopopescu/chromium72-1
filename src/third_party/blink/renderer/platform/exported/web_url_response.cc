@@ -455,6 +455,12 @@ void WebURLResponse::SetNetworkAccessed(bool network_accessed) {
   resource_response_->SetNetworkAccessed(network_accessed);
 }
 
+#if defined(USE_FILESCHEME_CODECACHE)
+void WebURLResponse::SetFileLastModifiedTime(base::Time last_modified_time) {
+  resource_response_->SetFileLastModifiedTime(last_modified_time);
+}
+#endif
+
 WebURLResponse::WebURLResponse(ResourceResponse& r) : resource_response_(&r) {}
 
 }  // namespace blink

@@ -45,6 +45,10 @@
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/shared_buffer.h"
 
+#if defined(USE_FILESCHEME_CODECACHE)
+#include "third_party/blink/renderer/platform/loader/fetch/resource_loader.h"
+#endif
+
 namespace blink {
 
 namespace {
@@ -193,6 +197,26 @@ CachedMetadataHandler* ScriptResource::CreateCachedMetadataHandler(
       Encoding(), std::move(send_callback));
 }
 
+#if defined(USE_FILESCHEME_CODECACHE)
+bool ScriptResource::CanCreateCachedMetadataHandler() {
+  if (GetResourceRequest().Url().ProtocolIsInHTTPFamily() &&
+      GetResponse().Url().ProtocolIsInHTTPFamily()) {
+    return true;
+  }
+  // In the case of cache busting, codecache will be created but not used
+  // mostly.
+  // So create only for url which doesn't have query string.
+  if (GetResourceRequest().Url().IsLocalFile() &&
+      GetResponse().Url().IsLocalFile() &&
+      GetResourceRequest().Url().Query().IsNull() &&
+      GetResponse().Url().Query().IsNull() &&
+      RuntimeEnabledFeatures::LocalResourceCodeCacheEnabled()) {
+    return true;
+  }
+  return false;
+}
+#endif
+
 void ScriptResource::SetSerializedCachedMetadata(const char* data,
                                                  size_t size) {
   Resource::SetSerializedCachedMetadata(data, size);
@@ -200,6 +224,10 @@ void ScriptResource::SetSerializedCachedMetadata(const char* data,
       static_cast<ScriptCachedMetadataHandler*>(Resource::CacheHandler());
   if (cache_handler) {
     cache_handler->SetSerializedCachedMetadata(data, size);
+#if defined(USE_FILESCHEME_CODECACHE)
+    LOG(INFO) << "V8CodeCache Consume " << Url().GetString().Utf8().data()
+              << "(" << size << ")";
+#endif
   }
 }
 

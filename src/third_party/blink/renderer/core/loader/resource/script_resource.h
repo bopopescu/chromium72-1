@@ -157,6 +157,10 @@ class CORE_EXPORT ScriptResource final : public TextResource {
   CachedMetadataHandler* CreateCachedMetadataHandler(
       std::unique_ptr<CachedMetadataSender> send_callback) override;
 
+#if defined(USE_FILESCHEME_CODECACHE)
+  bool CanCreateCachedMetadataHandler() override;
+#endif
+
   void DestroyDecodedDataForFailedRevalidation() override;
 
   void NotifyDataReceived(const char* data, size_t size) override;

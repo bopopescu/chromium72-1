@@ -290,6 +290,10 @@ class WebURLResponse {
 
   BLINK_PLATFORM_EXPORT void SetIsSignedExchangeInnerResponse(bool);
 
+#if defined(USE_FILESCHEME_CODECACHE)
+  BLINK_PLATFORM_EXPORT void SetFileLastModifiedTime(base::Time);
+#endif
+
   // Extra data associated with the underlying resource response. Resource
   // responses can be copied. If non-null, each copy of a resource response
   // holds a pointer to the extra data, and the extra data pointer will be

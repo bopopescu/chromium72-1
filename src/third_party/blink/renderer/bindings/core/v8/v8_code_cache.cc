@@ -20,6 +20,10 @@
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 #include "third_party/blink/renderer/platform/wtf/time.h"
 
+#if defined(USE_FILESCHEME_CODECACHE)
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#endif
+
 namespace blink {
 
 namespace {
@@ -59,6 +63,13 @@ bool IsResourceHotForCaching(SingleCachedMetadataHandler* cache_handler,
   memcpy(&time_stamp, cached_metadata->Data(), size);
   return (WTF::CurrentTime() - time_stamp) < hot_seconds;
 }
+
+#if defined(USE_FILESCHEME_CODECACHE)
+bool IsProducedCodeCacheForLocalResource(const ScriptSourceCode& source) {
+  return source.Url().IsLocalFile() &&
+         RuntimeEnabledFeatures::LocalResourceCodeCacheEnabled();
+}
+#endif
 
 }  // namespace
 
@@ -146,7 +157,16 @@ V8CodeCache::GetCompileOptions(V8CacheOptions cache_options,
   switch (cache_options) {
     case kV8CacheOptionsDefault:
     case kV8CacheOptionsCode:
+#if defined(USE_FILESCHEME_CODECACHE)
+      // We don't check timestamp(CacheTagTimeStamp) because it is always good
+      // to produce cache for local resource. But, this policy may be changed
+      // in the future while implementing CacheTagTimeStamp handling for local
+      // resources.
+      if (!IsProducedCodeCacheForLocalResource(source) &&
+          !IsResourceHotForCaching(cache_handler, kHotHours)) {
+#else
       if (!IsResourceHotForCaching(cache_handler, kHotHours)) {
+#endif
         return std::make_tuple(v8::ScriptCompiler::kNoCompileOptions,
                                ProduceCacheOptions::kSetTimeStamp,
                                v8::ScriptCompiler::kNoCacheBecauseCacheTooCold);
@@ -219,6 +239,11 @@ void V8CodeCache::ProduceCache(
         cache_handler->SetCachedMetadata(
             V8CodeCache::TagForCodeCache(cache_handler), data, length,
             CachedMetadataHandler::kSendToPlatform);
+#if defined(USE_FILESCHEME_CODECACHE)
+        LOG(INFO) << "V8CodeCache Produce "
+                  << source.Url().GetString().Utf8().data() << "(" << length
+                  << ")";
+#endif
       }
 
       TRACE_EVENT_END1(

@@ -59,6 +59,10 @@
 #include "third_party/blink/renderer/platform/wtf/time.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
+#if defined(USE_FILESCHEME_CODECACHE)
+#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
+#endif
+
 namespace blink {
 
 namespace {
@@ -534,12 +538,26 @@ bool Resource::WillFollowRedirect(const ResourceRequest& new_request,
   return true;
 }
 
+#if defined(USE_FILESCHEME_CODECACHE)
+bool Resource::CanCreateCachedMetadataHandler() {
+  // Currently we support the metadata caching only for HTTP family.
+  if (!GetResourceRequest().Url().ProtocolIsInHTTPFamily() ||
+      !GetResponse().Url().ProtocolIsInHTTPFamily())
+    return false;
+  return true;
+}
+#endif
+
 void Resource::SetResponse(const ResourceResponse& response) {
   response_ = response;
 
+#if defined(USE_FILESCHEME_CODECACHE)
+  if (!CanCreateCachedMetadataHandler()) {
+#else
   // Currently we support the metadata caching only for HTTP family.
   if (!GetResourceRequest().Url().ProtocolIsInHTTPFamily() ||
       !GetResponse().Url().ProtocolIsInHTTPFamily()) {
+#endif
     cache_handler_.Clear();
     return;
   }
